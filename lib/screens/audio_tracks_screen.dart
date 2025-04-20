@@ -796,7 +796,7 @@ class _AudioTracksScreenState extends State<AudioTracksScreen> with TickerProvid
                       ? const CircularProgressIndicator()
                       : IconButton(
                           icon: const Icon(Icons.search),
-                          onPressed: _processPlaceSelection,
+                          onPressed: _searchAddressFromInput,
                         ),
                 ],
               ),
@@ -956,5 +956,17 @@ class _AudioTracksScreenState extends State<AudioTracksScreen> with TickerProvid
         }
       },
     );
+  }
+
+  // Add a wrapper method that doesn't need parameters
+  void _searchAddressFromInput() {
+    // Create a mock prediction from the text field input
+    final inputText = _addressController.text;
+    if (inputText.isEmpty) return;
+    
+    final prediction = Prediction();
+    prediction.description = inputText;
+    
+    _processPlaceSelection(prediction);
   }
 } 
