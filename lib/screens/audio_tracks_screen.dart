@@ -32,6 +32,8 @@ class _AudioTracksScreenState extends State<AudioTracksScreen> with TickerProvid
   bool _isSearchingAddress = false;
   LatLng? _selectedLocation;
   String? _selectedLocationName;
+  List<Map<String, dynamic>> _addressSuggestions = [];
+  bool _showAddressSuggestions = false;
   
   @override
   void initState() {
@@ -44,6 +46,172 @@ class _AudioTracksScreenState extends State<AudioTracksScreen> with TickerProvid
       _selectedLocation = widget.initialPosition;
       _selectedLocationName = widget.locationName;
     }
+    
+    // Add listener to address controller for auto-completion
+    _addressController.addListener(_onAddressChanged);
+  }
+  
+  void _onAddressChanged() {
+    final query = _addressController.text.trim();
+    if (query.length > 2) {
+      _getAddressSuggestions(query);
+    } else {
+      setState(() {
+        _addressSuggestions = [];
+        _showAddressSuggestions = false;
+      });
+    }
+  }
+  
+  Future<void> _getAddressSuggestions(String query) async {
+    if (query.isEmpty) return;
+    
+    setState(() {
+      _isSearchingAddress = true;
+    });
+    
+    try {
+      // Use Geocoding API to find places that match the query
+      List<Map<String, dynamic>> suggestions = [];
+      
+      // Search by address/street
+      try {
+        final locations = await locationFromAddress(query);
+        for (var location in locations.take(3)) {
+          List<Placemark> placemarks = await placemarkFromCoordinates(
+            location.latitude, 
+            location.longitude,
+          );
+          
+          if (placemarks.isNotEmpty) {
+            final placemark = placemarks.first;
+            suggestions.add({
+              'type': 'address',
+              'display': '${placemark.street}, ${placemark.locality}, ${placemark.administrativeArea} ${placemark.postalCode}',
+              'location': LatLng(location.latitude, location.longitude),
+              'locality': placemark.locality,
+              'admin': placemark.administrativeArea,
+              'postal': placemark.postalCode,
+            });
+          }
+        }
+      } catch (e) {
+        // Continue with other search types if address search fails
+      }
+      
+      // Search by city
+      if (query.length > 3) {
+        try {
+          // Create a city-specific query
+          final cityQuery = '$query City';
+          final locations = await locationFromAddress(cityQuery);
+          if (locations.isNotEmpty) {
+            final location = locations.first;
+            List<Placemark> placemarks = await placemarkFromCoordinates(
+              location.latitude, 
+              location.longitude,
+            );
+            
+            if (placemarks.isNotEmpty) {
+              final placemark = placemarks.first;
+              suggestions.add({
+                'type': 'city',
+                'display': '${placemark.locality}, ${placemark.administrativeArea}',
+                'location': LatLng(location.latitude, location.longitude),
+                'locality': placemark.locality,
+                'admin': placemark.administrativeArea,
+              });
+            }
+          }
+        } catch (e) {
+          // Continue if city search fails
+        }
+      }
+      
+      // Search by ZIP/postal code if query looks like a ZIP code (numbers only)
+      if (RegExp(r'^\d+$').hasMatch(query)) {
+        try {
+          final zipQuery = 'ZIP Code $query';
+          final locations = await locationFromAddress(zipQuery);
+          if (locations.isNotEmpty) {
+            final location = locations.first;
+            List<Placemark> placemarks = await placemarkFromCoordinates(
+              location.latitude, 
+              location.longitude,
+            );
+            
+            if (placemarks.isNotEmpty) {
+              final placemark = placemarks.first;
+              suggestions.add({
+                'type': 'zip',
+                'display': '${placemark.postalCode} - ${placemark.locality}, ${placemark.administrativeArea}',
+                'location': LatLng(location.latitude, location.longitude),
+                'locality': placemark.locality,
+                'admin': placemark.administrativeArea,
+                'postal': placemark.postalCode,
+              });
+            }
+          }
+        } catch (e) {
+          // Continue if ZIP search fails
+        }
+      }
+      
+      // Search by state if query might be a state name or abbreviation
+      if (query.length >= 2) {
+        try {
+          final stateQuery = 'State of $query';
+          final locations = await locationFromAddress(stateQuery);
+          if (locations.isNotEmpty) {
+            final location = locations.first;
+            List<Placemark> placemarks = await placemarkFromCoordinates(
+              location.latitude, 
+              location.longitude,
+            );
+            
+            if (placemarks.isNotEmpty) {
+              final placemark = placemarks.first;
+              suggestions.add({
+                'type': 'state',
+                'display': placemark.administrativeArea,
+                'location': LatLng(location.latitude, location.longitude),
+                'admin': placemark.administrativeArea,
+              });
+            }
+          }
+        } catch (e) {
+          // Continue if state search fails
+        }
+      }
+      
+      // Remove duplicates
+      final uniqueSuggestions = <Map<String, dynamic>>[];
+      for (var suggestion in suggestions) {
+        if (!uniqueSuggestions.any((s) => s['display'] == suggestion['display'])) {
+          uniqueSuggestions.add(suggestion);
+        }
+      }
+      
+      setState(() {
+        _addressSuggestions = uniqueSuggestions;
+        _showAddressSuggestions = uniqueSuggestions.isNotEmpty;
+        _isSearchingAddress = false;
+      });
+    } catch (e) {
+      setState(() {
+        _isSearchingAddress = false;
+        _showAddressSuggestions = false;
+      });
+    }
+  }
+  
+  void _selectAddressSuggestion(Map<String, dynamic> suggestion) {
+    setState(() {
+      _addressController.text = suggestion['display'];
+      _selectedLocation = suggestion['location'];
+      _selectedLocationName = suggestion['display'];
+      _showAddressSuggestions = false;
+    });
   }
   
   Future<void> _initAudioService() async {
@@ -85,6 +253,7 @@ class _AudioTracksScreenState extends State<AudioTracksScreen> with TickerProvid
   void dispose() {
     _tabController.dispose();
     _searchController.dispose();
+    _addressController.removeListener(_onAddressChanged);
     _addressController.dispose();
     super.dispose();
   }
@@ -510,6 +679,57 @@ class _AudioTracksScreenState extends State<AudioTracksScreen> with TickerProvid
               border: OutlineInputBorder(),
             ),
           ),
+          // Address suggestions section
+          if (_showAddressSuggestions)
+            Container(
+              margin: const EdgeInsets.only(top: 4),
+              constraints: const BoxConstraints(maxHeight: 200),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                border: Border.all(color: Colors.grey.shade300),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: ListView(
+                shrinkWrap: true,
+                children: _addressSuggestions.map((suggestion) {
+                  IconData icon;
+                  Color iconColor;
+                  
+                  switch (suggestion['type']) {
+                    case 'address':
+                      icon = Icons.home;
+                      iconColor = Colors.blue;
+                      break;
+                    case 'city':
+                      icon = Icons.location_city;
+                      iconColor = Colors.green;
+                      break;
+                    case 'zip':
+                      icon = Icons.pin_drop;
+                      iconColor = Colors.red;
+                      break;
+                    case 'state':
+                      icon = Icons.map;
+                      iconColor = Colors.purple;
+                      break;
+                    default:
+                      icon = Icons.location_on;
+                      iconColor = Colors.grey;
+                  }
+                  
+                  return ListTile(
+                    leading: Icon(icon, color: iconColor),
+                    title: Text(suggestion['display']),
+                    subtitle: Text(suggestion['type'].toUpperCase()),
+                    onTap: () {
+                      _selectAddressSuggestion(suggestion);
+                      setState(() {});
+                    },
+                    dense: true,
+                  );
+                }).toList(),
+              ),
+            ),
           const SizedBox(height: 16),
           Row(
             children: [
@@ -599,6 +819,57 @@ class _AudioTracksScreenState extends State<AudioTracksScreen> with TickerProvid
               border: OutlineInputBorder(),
             ),
           ),
+          // Address suggestions section
+          if (_showAddressSuggestions)
+            Container(
+              margin: const EdgeInsets.only(top: 4),
+              constraints: const BoxConstraints(maxHeight: 200),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                border: Border.all(color: Colors.grey.shade300),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: ListView(
+                shrinkWrap: true,
+                children: _addressSuggestions.map((suggestion) {
+                  IconData icon;
+                  Color iconColor;
+                  
+                  switch (suggestion['type']) {
+                    case 'address':
+                      icon = Icons.home;
+                      iconColor = Colors.blue;
+                      break;
+                    case 'city':
+                      icon = Icons.location_city;
+                      iconColor = Colors.green;
+                      break;
+                    case 'zip':
+                      icon = Icons.pin_drop;
+                      iconColor = Colors.red;
+                      break;
+                    case 'state':
+                      icon = Icons.map;
+                      iconColor = Colors.purple;
+                      break;
+                    default:
+                      icon = Icons.location_on;
+                      iconColor = Colors.grey;
+                  }
+                  
+                  return ListTile(
+                    leading: Icon(icon, color: iconColor),
+                    title: Text(suggestion['display']),
+                    subtitle: Text(suggestion['type'].toUpperCase()),
+                    onTap: () {
+                      _selectAddressSuggestion(suggestion);
+                      setState(() {});
+                    },
+                    dense: true,
+                  );
+                }).toList(),
+              ),
+            ),
           const SizedBox(height: 16),
           Row(
             children: [
@@ -665,11 +936,20 @@ class _AudioTracksScreenState extends State<AudioTracksScreen> with TickerProvid
     final address = _addressController.text.trim();
     if (address.isEmpty) return;
     
+    // If suggestions are already showing, don't do another search
+    if (_showAddressSuggestions) {
+      setState(() {
+        _showAddressSuggestions = false;
+      });
+      return;
+    }
+    
     setState(() {
       _isSearchingAddress = true;
     });
     
     try {
+      // Force a search for the exact address entered
       final locations = await locationFromAddress(address);
       if (locations.isNotEmpty) {
         final location = locations.first;
@@ -778,6 +1058,59 @@ class _AudioTracksScreenState extends State<AudioTracksScreen> with TickerProvid
                         ),
                 ],
               ),
+              if (_showAddressSuggestions)
+                Container(
+                  margin: const EdgeInsets.only(top: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    border: Border.all(color: Colors.grey.shade300),
+                    borderRadius: BorderRadius.circular(4),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.1),
+                        blurRadius: 4,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: _addressSuggestions.map((suggestion) {
+                      IconData icon;
+                      Color iconColor;
+                      
+                      switch (suggestion['type']) {
+                        case 'address':
+                          icon = Icons.home;
+                          iconColor = Colors.blue;
+                          break;
+                        case 'city':
+                          icon = Icons.location_city;
+                          iconColor = Colors.green;
+                          break;
+                        case 'zip':
+                          icon = Icons.pin_drop;
+                          iconColor = Colors.red;
+                          break;
+                        case 'state':
+                          icon = Icons.map;
+                          iconColor = Colors.purple;
+                          break;
+                        default:
+                          icon = Icons.location_on;
+                          iconColor = Colors.grey;
+                      }
+                      
+                      return ListTile(
+                        leading: Icon(icon, color: iconColor),
+                        title: Text(suggestion['display']),
+                        subtitle: Text(suggestion['type'].toUpperCase()),
+                        onTap: () => _selectAddressSuggestion(suggestion),
+                        dense: true,
+                      );
+                    }).toList(),
+                  ),
+                ),
             ],
           ),
         ),
