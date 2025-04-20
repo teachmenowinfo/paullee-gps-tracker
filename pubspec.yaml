@@ -45,6 +45,7 @@ dependencies:
   geocoding: ^3.0.0
   http: ^1.3.0
   flutter_polyline_points: ^2.0.0
+  google_places_flutter: ^2.0.6
   
   # Geofencing support
   geofence_service: ^5.0.0

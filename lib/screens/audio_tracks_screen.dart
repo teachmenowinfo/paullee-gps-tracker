@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:on_audio_query/on_audio_query.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geocoding/geocoding.dart';
+import 'package:google_places_flutter/google_places_flutter.dart';
+import 'package:google_places_flutter/model/prediction.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import '../services/audio_service.dart';
 import '../models/audio_track.dart';
 
@@ -46,172 +49,143 @@ class _AudioTracksScreenState extends State<AudioTracksScreen> with TickerProvid
       _selectedLocation = widget.initialPosition;
       _selectedLocationName = widget.locationName;
     }
-    
-    // Add listener to address controller for auto-completion
-    _addressController.addListener(_onAddressChanged);
   }
   
-  void _onAddressChanged() {
-    final query = _addressController.text.trim();
-    if (query.length > 2) {
-      _getAddressSuggestions(query);
-    } else {
-      setState(() {
-        _addressSuggestions = [];
-        _showAddressSuggestions = false;
-      });
-    }
+  @override
+  void dispose() {
+    _tabController.dispose();
+    _searchController.dispose();
+    _addressController.dispose();
+    super.dispose();
   }
   
-  Future<void> _getAddressSuggestions(String query) async {
-    if (query.isEmpty) return;
+  Future<void> _processPlaceSelection(Prediction prediction) async {
+    if (prediction.description == null) return;
     
     setState(() {
       _isSearchingAddress = true;
+      _addressController.text = prediction.description!;
     });
     
     try {
-      // Use Geocoding API to find places that match the query
-      List<Map<String, dynamic>> suggestions = [];
-      
-      // Search by address/street
-      try {
-        final locations = await locationFromAddress(query);
-        for (var location in locations.take(3)) {
-          List<Placemark> placemarks = await placemarkFromCoordinates(
-            location.latitude, 
-            location.longitude,
-          );
-          
-          if (placemarks.isNotEmpty) {
-            final placemark = placemarks.first;
-            suggestions.add({
-              'type': 'address',
-              'display': '${placemark.street}, ${placemark.locality}, ${placemark.administrativeArea} ${placemark.postalCode}',
-              'location': LatLng(location.latitude, location.longitude),
-              'locality': placemark.locality,
-              'admin': placemark.administrativeArea,
-              'postal': placemark.postalCode,
-            });
-          }
-        }
-      } catch (e) {
-        // Continue with other search types if address search fails
+      // Use geocoding to get coordinates from the selected place
+      List<Location> locations = await locationFromAddress(prediction.description!);
+      if (locations.isNotEmpty) {
+        final location = locations.first;
+        setState(() {
+          _selectedLocation = LatLng(location.latitude, location.longitude);
+          _selectedLocationName = prediction.description;
+          _isSearchingAddress = false;
+        });
+        
+        // Show confirmation
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Location set to: ${prediction.description}')),
+        );
+      } else {
+        setState(() {
+          _isSearchingAddress = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not find coordinates for this location')),
+        );
       }
-      
-      // Search by city
-      if (query.length > 3) {
-        try {
-          // Create a city-specific query
-          final cityQuery = '$query City';
-          final locations = await locationFromAddress(cityQuery);
-          if (locations.isNotEmpty) {
-            final location = locations.first;
-            List<Placemark> placemarks = await placemarkFromCoordinates(
-              location.latitude, 
-              location.longitude,
-            );
-            
-            if (placemarks.isNotEmpty) {
-              final placemark = placemarks.first;
-              suggestions.add({
-                'type': 'city',
-                'display': '${placemark.locality}, ${placemark.administrativeArea}',
-                'location': LatLng(location.latitude, location.longitude),
-                'locality': placemark.locality,
-                'admin': placemark.administrativeArea,
-              });
-            }
-          }
-        } catch (e) {
-          // Continue if city search fails
-        }
-      }
-      
-      // Search by ZIP/postal code if query looks like a ZIP code (numbers only)
-      if (RegExp(r'^\d+$').hasMatch(query)) {
-        try {
-          final zipQuery = 'ZIP Code $query';
-          final locations = await locationFromAddress(zipQuery);
-          if (locations.isNotEmpty) {
-            final location = locations.first;
-            List<Placemark> placemarks = await placemarkFromCoordinates(
-              location.latitude, 
-              location.longitude,
-            );
-            
-            if (placemarks.isNotEmpty) {
-              final placemark = placemarks.first;
-              suggestions.add({
-                'type': 'zip',
-                'display': '${placemark.postalCode} - ${placemark.locality}, ${placemark.administrativeArea}',
-                'location': LatLng(location.latitude, location.longitude),
-                'locality': placemark.locality,
-                'admin': placemark.administrativeArea,
-                'postal': placemark.postalCode,
-              });
-            }
-          }
-        } catch (e) {
-          // Continue if ZIP search fails
-        }
-      }
-      
-      // Search by state if query might be a state name or abbreviation
-      if (query.length >= 2) {
-        try {
-          final stateQuery = 'State of $query';
-          final locations = await locationFromAddress(stateQuery);
-          if (locations.isNotEmpty) {
-            final location = locations.first;
-            List<Placemark> placemarks = await placemarkFromCoordinates(
-              location.latitude, 
-              location.longitude,
-            );
-            
-            if (placemarks.isNotEmpty) {
-              final placemark = placemarks.first;
-              suggestions.add({
-                'type': 'state',
-                'display': placemark.administrativeArea,
-                'location': LatLng(location.latitude, location.longitude),
-                'admin': placemark.administrativeArea,
-              });
-            }
-          }
-        } catch (e) {
-          // Continue if state search fails
-        }
-      }
-      
-      // Remove duplicates
-      final uniqueSuggestions = <Map<String, dynamic>>[];
-      for (var suggestion in suggestions) {
-        if (!uniqueSuggestions.any((s) => s['display'] == suggestion['display'])) {
-          uniqueSuggestions.add(suggestion);
-        }
-      }
-      
-      setState(() {
-        _addressSuggestions = uniqueSuggestions;
-        _showAddressSuggestions = uniqueSuggestions.isNotEmpty;
-        _isSearchingAddress = false;
-      });
     } catch (e) {
       setState(() {
         _isSearchingAddress = false;
-        _showAddressSuggestions = false;
       });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error getting location coordinates: $e')),
+      );
     }
   }
   
-  void _selectAddressSuggestion(Map<String, dynamic> suggestion) {
-    setState(() {
-      _addressController.text = suggestion['display'];
-      _selectedLocation = suggestion['location'];
-      _selectedLocationName = suggestion['display'];
-      _showAddressSuggestions = false;
-    });
+  Widget _buildGooglePlacesAutocomplete() {
+    // Get Google API key from .env file
+    final apiKey = dotenv.env['GOOGLE_MAPS_API_KEY'] ?? '';
+    
+    return Column(
+      children: [
+        Container(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.grey.shade300),
+          ),
+          child: GooglePlaceAutoCompleteTextField(
+            textEditingController: _addressController,
+            googleAPIKey: apiKey,
+            inputDecoration: const InputDecoration(
+              hintText: 'Enter address, city, or zip code',
+              prefixIcon: Icon(Icons.location_on),
+              border: InputBorder.none,
+              contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            ),
+            debounceTime: 800, // Milliseconds to wait after typing
+            countries: const ['us', 'ca'], // Limit to US and Canada - modify as needed
+            isLatLngRequired: true, // Include location coordinates
+            getPlaceDetailWithLatLng: (Prediction prediction) {
+              // Handle lat/lng directly if available from the API
+              if (prediction.lat != null && prediction.lng != null) {
+                setState(() {
+                  _selectedLocation = LatLng(
+                    double.parse(prediction.lat!),
+                    double.parse(prediction.lng!),
+                  );
+                  _selectedLocationName = prediction.description;
+                });
+                
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Location set to: ${prediction.description}')),
+                );
+              } else {
+                // Fall back to geocoding if coordinates aren't provided
+                _processPlaceSelection(prediction);
+              }
+            },
+            itemClick: (Prediction prediction) {
+              // When user selects a place but coords aren't included
+              _processPlaceSelection(prediction);
+            },
+            isCrossBtnShown: true, // Show X to clear the field
+          ),
+        ),
+        // Add the slider control for radius
+        const SizedBox(height: 16),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Trigger radius: ${_selectedRadius.toStringAsFixed(0)} meters'),
+            Slider(
+              value: _selectedRadius,
+              min: 10,
+              max: 1000,
+              divisions: 99,
+              label: '${_selectedRadius.toStringAsFixed(0)}m',
+              onChanged: (value) {
+                setState(() {
+                  _selectedRadius = value;
+                });
+              },
+            ),
+          ],
+        ),
+        // Add the action buttons
+        const SizedBox(height: 8),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.end,
+          children: [
+            TextButton(
+              onPressed: () {
+                Navigator.pop(context);
+              },
+              child: const Text('Cancel'),
+            ),
+            const SizedBox(width: 16),
+            // Other buttons would go here
+          ],
+        ),
+      ],
+    );
   }
   
   Future<void> _initAudioService() async {
@@ -247,15 +221,6 @@ class _AudioTracksScreenState extends State<AudioTracksScreen> with TickerProvid
              artist.contains(query) || 
              album.contains(query);
     }).toList();
-  }
-  
-  @override
-  void dispose() {
-    _tabController.dispose();
-    _searchController.dispose();
-    _addressController.removeListener(_onAddressChanged);
-    _addressController.dispose();
-    super.dispose();
   }
   
   @override
@@ -671,100 +636,13 @@ class _AudioTracksScreenState extends State<AudioTracksScreen> with TickerProvid
           const SizedBox(height: 16),
           Text('Track: ${track.title} by ${track.artist}'),
           const SizedBox(height: 16),
-          TextField(
-            controller: _addressController,
-            decoration: const InputDecoration(
-              labelText: 'Location Name/Address',
-              hintText: 'Enter an address, city, or zip code',
-              border: OutlineInputBorder(),
-            ),
-          ),
-          // Address suggestions section
-          if (_showAddressSuggestions)
-            Container(
-              margin: const EdgeInsets.only(top: 4),
-              constraints: const BoxConstraints(maxHeight: 200),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                border: Border.all(color: Colors.grey.shade300),
-                borderRadius: BorderRadius.circular(4),
-              ),
-              child: ListView(
-                shrinkWrap: true,
-                children: _addressSuggestions.map((suggestion) {
-                  IconData icon;
-                  Color iconColor;
-                  
-                  switch (suggestion['type']) {
-                    case 'address':
-                      icon = Icons.home;
-                      iconColor = Colors.blue;
-                      break;
-                    case 'city':
-                      icon = Icons.location_city;
-                      iconColor = Colors.green;
-                      break;
-                    case 'zip':
-                      icon = Icons.pin_drop;
-                      iconColor = Colors.red;
-                      break;
-                    case 'state':
-                      icon = Icons.map;
-                      iconColor = Colors.purple;
-                      break;
-                    default:
-                      icon = Icons.location_on;
-                      iconColor = Colors.grey;
-                  }
-                  
-                  return ListTile(
-                    leading: Icon(icon, color: iconColor),
-                    title: Text(suggestion['display']),
-                    subtitle: Text(suggestion['type'].toUpperCase()),
-                    onTap: () {
-                      _selectAddressSuggestion(suggestion);
-                      setState(() {});
-                    },
-                    dense: true,
-                  );
-                }).toList(),
-              ),
-            ),
+          _buildGooglePlacesAutocomplete(),
           const SizedBox(height: 16),
           Row(
             children: [
               Expanded(
                 child: Text('Trigger radius: ${_selectedRadius.toStringAsFixed(0)} meters'),
               ),
-              ElevatedButton(
-                onPressed: _searchAddress,
-                child: const Text('Search Location'),
-              ),
-            ],
-          ),
-          Slider(
-            value: _selectedRadius,
-            min: 10,
-            max: 1000,
-            divisions: 99,
-            label: '${_selectedRadius.toStringAsFixed(0)}m',
-            onChanged: (value) {
-              setState(() {
-                _selectedRadius = value;
-              });
-            },
-          ),
-          const SizedBox(height: 16),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.end,
-            children: [
-              TextButton(
-                onPressed: () {
-                  Navigator.pop(context);
-                },
-                child: const Text('Cancel'),
-              ),
-              const SizedBox(width: 16),
               ElevatedButton(
                 onPressed: _selectedLocation == null 
                     ? null 
@@ -811,100 +689,13 @@ class _AudioTracksScreenState extends State<AudioTracksScreen> with TickerProvid
           const SizedBox(height: 16),
           Text('Track: ${track.title} by ${track.artist}'),
           const SizedBox(height: 16),
-          TextField(
-            controller: _addressController,
-            decoration: const InputDecoration(
-              labelText: 'Location Name/Address',
-              hintText: 'Enter an address, city, or zip code',
-              border: OutlineInputBorder(),
-            ),
-          ),
-          // Address suggestions section
-          if (_showAddressSuggestions)
-            Container(
-              margin: const EdgeInsets.only(top: 4),
-              constraints: const BoxConstraints(maxHeight: 200),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                border: Border.all(color: Colors.grey.shade300),
-                borderRadius: BorderRadius.circular(4),
-              ),
-              child: ListView(
-                shrinkWrap: true,
-                children: _addressSuggestions.map((suggestion) {
-                  IconData icon;
-                  Color iconColor;
-                  
-                  switch (suggestion['type']) {
-                    case 'address':
-                      icon = Icons.home;
-                      iconColor = Colors.blue;
-                      break;
-                    case 'city':
-                      icon = Icons.location_city;
-                      iconColor = Colors.green;
-                      break;
-                    case 'zip':
-                      icon = Icons.pin_drop;
-                      iconColor = Colors.red;
-                      break;
-                    case 'state':
-                      icon = Icons.map;
-                      iconColor = Colors.purple;
-                      break;
-                    default:
-                      icon = Icons.location_on;
-                      iconColor = Colors.grey;
-                  }
-                  
-                  return ListTile(
-                    leading: Icon(icon, color: iconColor),
-                    title: Text(suggestion['display']),
-                    subtitle: Text(suggestion['type'].toUpperCase()),
-                    onTap: () {
-                      _selectAddressSuggestion(suggestion);
-                      setState(() {});
-                    },
-                    dense: true,
-                  );
-                }).toList(),
-              ),
-            ),
+          _buildGooglePlacesAutocomplete(),
           const SizedBox(height: 16),
           Row(
             children: [
               Expanded(
                 child: Text('Trigger radius: ${_selectedRadius.toStringAsFixed(0)} meters'),
               ),
-              ElevatedButton(
-                onPressed: _searchAddress,
-                child: const Text('Search Location'),
-              ),
-            ],
-          ),
-          Slider(
-            value: _selectedRadius,
-            min: 10,
-            max: 1000,
-            divisions: 99,
-            label: '${_selectedRadius.toStringAsFixed(0)}m',
-            onChanged: (value) {
-              setState(() {
-                _selectedRadius = value;
-              });
-            },
-          ),
-          const SizedBox(height: 16),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.end,
-            children: [
-              TextButton(
-                onPressed: () {
-                  Navigator.pop(context);
-                },
-                child: const Text('Cancel'),
-              ),
-              const SizedBox(width: 16),
               ElevatedButton(
                 onPressed: _selectedLocation == null 
                     ? null 
@@ -930,55 +721,6 @@ class _AudioTracksScreenState extends State<AudioTracksScreen> with TickerProvid
         ],
       ),
     );
-  }
-  
-  Future<void> _searchAddress() async {
-    final address = _addressController.text.trim();
-    if (address.isEmpty) return;
-    
-    // If suggestions are already showing, don't do another search
-    if (_showAddressSuggestions) {
-      setState(() {
-        _showAddressSuggestions = false;
-      });
-      return;
-    }
-    
-    setState(() {
-      _isSearchingAddress = true;
-    });
-    
-    try {
-      // Force a search for the exact address entered
-      final locations = await locationFromAddress(address);
-      if (locations.isNotEmpty) {
-        final location = locations.first;
-        setState(() {
-          _selectedLocation = LatLng(location.latitude, location.longitude);
-          _selectedLocationName = address;
-          _isSearchingAddress = false;
-        });
-        
-        // Show confirmation
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Location set to: $address')),
-        );
-      } else {
-        setState(() {
-          _isSearchingAddress = false;
-        });
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Location not found')),
-        );
-      }
-    } catch (e) {
-      setState(() {
-        _isSearchingAddress = false;
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error searching location: $e')),
-      );
-    }
   }
   
   Widget _buildDeviceTracksTab() {
@@ -1054,63 +796,10 @@ class _AudioTracksScreenState extends State<AudioTracksScreen> with TickerProvid
                       ? const CircularProgressIndicator()
                       : IconButton(
                           icon: const Icon(Icons.search),
-                          onPressed: _searchAddress,
+                          onPressed: _processPlaceSelection,
                         ),
                 ],
               ),
-              if (_showAddressSuggestions)
-                Container(
-                  margin: const EdgeInsets.only(top: 4),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    border: Border.all(color: Colors.grey.shade300),
-                    borderRadius: BorderRadius.circular(4),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.1),
-                        blurRadius: 4,
-                        offset: const Offset(0, 2),
-                      ),
-                    ],
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: _addressSuggestions.map((suggestion) {
-                      IconData icon;
-                      Color iconColor;
-                      
-                      switch (suggestion['type']) {
-                        case 'address':
-                          icon = Icons.home;
-                          iconColor = Colors.blue;
-                          break;
-                        case 'city':
-                          icon = Icons.location_city;
-                          iconColor = Colors.green;
-                          break;
-                        case 'zip':
-                          icon = Icons.pin_drop;
-                          iconColor = Colors.red;
-                          break;
-                        case 'state':
-                          icon = Icons.map;
-                          iconColor = Colors.purple;
-                          break;
-                        default:
-                          icon = Icons.location_on;
-                          iconColor = Colors.grey;
-                      }
-                      
-                      return ListTile(
-                        leading: Icon(icon, color: iconColor),
-                        title: Text(suggestion['display']),
-                        subtitle: Text(suggestion['type'].toUpperCase()),
-                        onTap: () => _selectAddressSuggestion(suggestion),
-                        dense: true,
-                      );
-                    }).toList(),
-                  ),
-                ),
             ],
           ),
         ),
