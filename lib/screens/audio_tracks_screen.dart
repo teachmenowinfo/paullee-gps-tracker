@@ -100,6 +100,31 @@ class _AudioTracksScreenState extends State<AudioTracksScreen> with TickerProvid
     }
   }
   
+  void _handleGetPlaceDetailWithLatLng(Prediction prediction) {
+    // Handle lat/lng directly if available from the API
+    if (prediction.lat != null && prediction.lng != null) {
+      setState(() {
+        _selectedLocation = LatLng(
+          double.parse(prediction.lat!),
+          double.parse(prediction.lng!),
+        );
+        _selectedLocationName = prediction.description;
+      });
+      
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Location set to: ${prediction.description}')),
+      );
+    } else {
+      // Fall back to geocoding if coordinates aren't provided
+      _processPlaceSelection(prediction);
+    }
+  }
+  
+  void _handleItemClick(Prediction prediction) {
+    // When user selects a place but coords aren't included
+    _processPlaceSelection(prediction);
+  }
+  
   Widget _buildGooglePlacesAutocomplete() {
     // Get Google API key from .env file
     final apiKey = dotenv.env['GOOGLE_MAPS_API_KEY'] ?? '';
@@ -123,29 +148,8 @@ class _AudioTracksScreenState extends State<AudioTracksScreen> with TickerProvid
             debounceTime: 800, // Milliseconds to wait after typing
             countries: const ['us', 'ca'], // Limit to US and Canada - modify as needed
             isLatLngRequired: true, // Include location coordinates
-            getPlaceDetailWithLatLng: (Prediction prediction) {
-              // Handle lat/lng directly if available from the API
-              if (prediction.lat != null && prediction.lng != null) {
-                setState(() {
-                  _selectedLocation = LatLng(
-                    double.parse(prediction.lat!),
-                    double.parse(prediction.lng!),
-                  );
-                  _selectedLocationName = prediction.description;
-                });
-                
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('Location set to: ${prediction.description}')),
-                );
-              } else {
-                // Fall back to geocoding if coordinates aren't provided
-                _processPlaceSelection(prediction);
-              }
-            },
-            itemClick: (Prediction prediction) {
-              // When user selects a place but coords aren't included
-              _processPlaceSelection(prediction);
-            },
+            getPlaceDetailWithLatLng: _handleGetPlaceDetailWithLatLng,
+            itemClick: _handleItemClick,
             isCrossBtnShown: true, // Show X to clear the field
           ),
         ),
