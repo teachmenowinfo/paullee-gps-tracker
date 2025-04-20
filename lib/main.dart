@@ -17,6 +17,7 @@ import 'package:flutter_polyline_points/flutter_polyline_points.dart';
 import 'screens/audio_tracks_screen.dart';
 import 'features/feature_manager.dart';
 import 'services/audio_service.dart';
+import 'models/audio_track.dart' as audio_model;
 
 // TODO: Import Apple's Family Controls framework when approval is granted
 
@@ -297,9 +298,126 @@ class MapSampleState extends State<MapSample> {
       }
     }
     
+    // Add markers for locations with audio tracks
+    final audioService = AudioLocationService();
+    final audioTracks = audioService.getLocationAudioTracks();
+    
+    for (var track in audioTracks) {
+      for (var location in track.locations) {
+        newMarkers.add(
+          Marker(
+            width: 60.0,
+            height: 60.0,
+            point: location.position,
+            child: GestureDetector(
+              onTap: () => _showAudioTrackInfo(track, location),
+              child: Tooltip(
+                message: '${track.title} by ${track.artist}',
+                child: const Icon(
+                  Icons.music_note,
+                  color: Colors.blue,
+                  size: 30.0,
+                ),
+              ),
+            ),
+          ),
+        );
+      }
+    }
+    
     setState(() {
       _markers = newMarkers;
     });
+  }
+  
+  void _showAudioTrackInfo(audio_model.LocationAudioTrack track, audio_model.LocationPoint location) {
+    showModalBottomSheet(
+      context: context,
+      builder: (context) => Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  width: 50,
+                  height: 50,
+                  decoration: BoxDecoration(
+                    color: Colors.blue,
+                    borderRadius: BorderRadius.circular(25),
+                  ),
+                  child: const Icon(
+                    Icons.music_note,
+                    color: Colors.white,
+                    size: 30,
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        track.title,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 18,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      Text(
+                        track.artist,
+                        style: const TextStyle(
+                          fontSize: 14,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Text('Location: ${location.locationName ?? "Unnamed Location"}'),
+            Text('Trigger radius: ${location.radius.toStringAsFixed(0)} meters'),
+            const SizedBox(height: 16),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                ElevatedButton.icon(
+                  onPressed: () {
+                    AudioLocationService().playTrackManually(track.id);
+                    Navigator.pop(context);
+                  },
+                  icon: const Icon(Icons.play_arrow),
+                  label: const Text('Play Now'),
+                ),
+                ElevatedButton.icon(
+                  onPressed: () {
+                    Navigator.pop(context);
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => AudioTracksScreen(
+                          initialPosition: location.position,
+                          locationName: location.locationName,
+                        ),
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.edit),
+                  label: const Text('Edit'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
   }
   
   List<Polyline> _buildHistoryPolylines() {
@@ -829,32 +947,45 @@ class MapSampleState extends State<MapSample> {
     }
   }
 
-  Future<void> _getAddressFromCoordinates(double latitude, double longitude) async {
+  Future<String?> _getAddressFromCoordinates(double latitude, double longitude) async {
     try {
       List<Placemark> placemarks = await placemarkFromCoordinates(latitude, longitude);
       
       if (placemarks.isNotEmpty) {
         Placemark place = placemarks[0];
-        final address = [
-          place.street,
-          place.subLocality,
-          place.locality,
-          place.postalCode,
-          place.country,
-        ].where((element) => element != null && element.isNotEmpty).join(', ');
+        String address = '';
         
-        setState(() {
-          _currentAddress = address;
-        });
+        if (place.street != null && place.street!.isNotEmpty) {
+          address += place.street!;
+        }
         
-        // Update the location point with the address
-        if (_locationHistory.isNotEmpty) {
-          _locationHistory.last.address = address;
+        if (place.locality != null && place.locality!.isNotEmpty) {
+          if (address.isNotEmpty) address += ', ';
+          address += place.locality!;
+        }
+        
+        if (place.administrativeArea != null && place.administrativeArea!.isNotEmpty) {
+          if (address.isNotEmpty) address += ', ';
+          address += place.administrativeArea!;
+        }
+        
+        if (place.postalCode != null && place.postalCode!.isNotEmpty) {
+          if (address.isNotEmpty) address += ' ';
+          address += place.postalCode!;
+        }
+        
+        if (address.isNotEmpty) {
+          setState(() {
+            _currentAddress = address;
+          });
+          return address;
         }
       }
     } catch (e) {
-      print('Error getting address: $e');
+      debugPrint('Error getting address: $e');
     }
+    
+    return null;
   }
   
   Future<void> _searchLocations(String query) async {
@@ -1568,6 +1699,69 @@ class MapSampleState extends State<MapSample> {
     );
   }
   
+  void _handleMapLongPress(LatLng point) {
+    // Get address for the long-pressed location
+    _getAddressFromCoordinates(point.latitude, point.longitude).then((address) {
+      showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Location Options'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Coordinates: ${point.latitude.toStringAsFixed(6)}, ${point.longitude.toStringAsFixed(6)}'),
+              const SizedBox(height: 8),
+              if (address != null) Text('Address: $address'),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.pop(context);
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => AudioTracksScreen(
+                      initialPosition: point,
+                      locationName: address,
+                    ),
+                  ),
+                );
+              },
+              child: const Text('Associate Music'),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.pop(context);
+                // Add location to visited places
+                final locationPoint = LocationPoint(
+                  position: point,
+                  accuracy: 0,
+                  timestamp: DateTime.now(),
+                  address: address,
+                  isVisited: true,
+                );
+                setState(() {
+                  _visitedPlaces.add(locationPoint);
+                  _updateMarkers();
+                });
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Location marked as visited')),
+                );
+              },
+              child: const Text('Mark as Visited'),
+            ),
+          ],
+        ),
+      );
+    });
+  }
+  
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -1703,6 +1897,9 @@ class MapSampleState extends State<MapSample> {
                           onTap: (_, __) {
                             // When user taps, they're interacting with the map
                             _userInteracting = true;
+                          },
+                          onLongPress: (tapPosition, point) {
+                            _handleMapLongPress(point);
                           },
                           onMapEvent: (MapEvent event) {
                             if (event is MapEventDoubleTapZoomStart || 
