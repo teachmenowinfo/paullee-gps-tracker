@@ -91,18 +91,84 @@ class AudioLocationService {
     String? locationName,
     double radius = 100.0,
   }) async {
-    final track = LocationAudioTrack(
+    // Create a new location point
+    final locationPoint = LocationPoint(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
-      title: song.title,
-      artist: song.artist ?? 'Unknown Artist',
-      audioUri: song.uri ?? '',
       position: position,
       locationName: locationName,
-      associatedAt: DateTime.now(),
       radius: radius,
     );
     
-    _locationTracks.add(track);
+    // Check if we already have a track with this song
+    final existingTrackIndex = _locationTracks.indexWhere(
+      (track) => track.audioUri == song.uri
+    );
+    
+    if (existingTrackIndex >= 0) {
+      // Add the new location to the existing track
+      final updatedTrack = _locationTracks[existingTrackIndex].addLocation(locationPoint);
+      _locationTracks[existingTrackIndex] = updatedTrack;
+    } else {
+      // Create a new track with this location
+      final track = LocationAudioTrack(
+        id: DateTime.now().millisecondsSinceEpoch.toString(),
+        title: song.title,
+        artist: song.artist ?? 'Unknown Artist',
+        audioUri: song.uri ?? '',
+        locations: [locationPoint],
+        associatedAt: DateTime.now(),
+      );
+      
+      _locationTracks.add(track);
+    }
+    
+    await _saveTracks();
+  }
+  
+  // Remove a location from a track
+  Future<void> removeLocationFromTrack(String trackId, String locationId) async {
+    final trackIndex = _locationTracks.indexWhere((track) => track.id == trackId);
+    if (trackIndex < 0) return;
+    
+    final track = _locationTracks[trackIndex];
+    final updatedTrack = track.removeLocation(locationId);
+    
+    // If no locations left, remove the track entirely
+    if (updatedTrack.locations.isEmpty) {
+      await removeLocationAudioTrack(trackId);
+    } else {
+      _locationTracks[trackIndex] = updatedTrack;
+      await _saveTracks();
+    }
+    
+    // If we're removing the currently playing track's active location, stop playback
+    if (_currentlyPlayingTrack?.id == trackId) {
+      await stopPlayback();
+    }
+  }
+  
+  // Update a location for a track
+  Future<void> updateLocationForTrack(
+    String trackId, 
+    String locationId, 
+    LatLng position, 
+    String? locationName, 
+    double radius
+  ) async {
+    final trackIndex = _locationTracks.indexWhere((track) => track.id == trackId);
+    if (trackIndex < 0) return;
+    
+    final track = _locationTracks[trackIndex];
+    final updatedLocation = LocationPoint(
+      id: locationId,
+      position: position,
+      locationName: locationName,
+      radius: radius,
+    );
+    
+    final updatedTrack = track.updateLocation(updatedLocation);
+    _locationTracks[trackIndex] = updatedTrack;
+    
     await _saveTracks();
   }
   
@@ -151,20 +217,24 @@ class AudioLocationService {
     
     final currentPosition = LatLng(position.latitude, position.longitude);
     
-    // Find the closest track within radius
+    // Find the closest location point among all tracks
     LocationAudioTrack? closestTrack;
+    LocationPoint? closestLocation;
     double closestDistance = double.infinity;
     
     for (final track in _locationTracks) {
-      final distance = _distance.as(
-        LengthUnit.Meter,
-        currentPosition,
-        track.position,
-      );
-      
-      if (distance <= track.radius && distance < closestDistance) {
-        closestTrack = track;
-        closestDistance = distance;
+      for (final location in track.locations) {
+        final distance = _distance.as(
+          LengthUnit.Meter,
+          currentPosition,
+          location.position,
+        );
+        
+        if (distance <= location.radius && distance < closestDistance) {
+          closestTrack = track;
+          closestLocation = location;
+          closestDistance = distance;
+        }
       }
     }
     
@@ -230,5 +300,17 @@ class AudioLocationService {
   Future<void> dispose() async {
     await stopMonitoring();
     await _audioPlayer.dispose();
+  }
+  
+  // Add a location to an existing track
+  Future<void> addLocationToTrack(String trackId, LocationPoint locationPoint) async {
+    final trackIndex = _locationTracks.indexWhere((track) => track.id == trackId);
+    if (trackIndex < 0) return;
+    
+    final track = _locationTracks[trackIndex];
+    final updatedTrack = track.addLocation(locationPoint);
+    _locationTracks[trackIndex] = updatedTrack;
+    
+    await _saveTracks();
   }
 } 

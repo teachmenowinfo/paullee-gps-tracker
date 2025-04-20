@@ -307,7 +307,7 @@ class _AudioTracksScreenState extends State<AudioTracksScreen> with TickerProvid
   Widget _buildLocationTrackTile(LocationAudioTrack track) {
     final isPlaying = _audioService.getCurrentlyPlayingTrack()?.id == track.id;
     
-    return ListTile(
+    return ExpansionTile(
       leading: CircleAvatar(
         backgroundColor: isPlaying ? Colors.blue : Colors.grey[700],
         child: const Icon(
@@ -321,22 +321,7 @@ class _AudioTracksScreenState extends State<AudioTracksScreen> with TickerProvid
           fontWeight: isPlaying ? FontWeight.bold : FontWeight.normal,
         ),
       ),
-      subtitle: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(track.artist),
-          if (track.locationName != null)
-            Text(
-              'Location: ${track.locationName}',
-              style: const TextStyle(fontSize: 12),
-            ),
-          Text(
-            'Range: ${track.radius.toStringAsFixed(0)}m',
-            style: const TextStyle(fontSize: 12),
-          ),
-        ],
-      ),
-      isThreeLine: true,
+      subtitle: Text('${track.artist} • ${track.locations.length} location${track.locations.length == 1 ? '' : 's'}'),
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -362,7 +347,7 @@ class _AudioTracksScreenState extends State<AudioTracksScreen> with TickerProvid
                 builder: (context) => AlertDialog(
                   title: const Text('Delete Track'),
                   content: const Text(
-                    'Are you sure you want to remove this track from this location?'
+                    'Are you sure you want to remove this track and all its locations?'
                   ),
                   actions: [
                     TextButton(
@@ -385,7 +370,335 @@ class _AudioTracksScreenState extends State<AudioTracksScreen> with TickerProvid
           ),
         ],
       ),
+      children: [
+        // Show all locations for this track
+        ...track.locations.map((location) => _buildLocationItem(track, location)),
+        
+        // Add a new location to this track
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: ElevatedButton.icon(
+            onPressed: () {
+              _addressController.clear();
+              _selectedRadius = 100.0;
+              _selectedLocation = null;
+              _selectedLocationName = null;
+              
+              showModalBottomSheet(
+                context: context,
+                isScrollControlled: true, 
+                builder: (context) => _buildAddLocationSheet(track),
+              );
+            },
+            icon: const Icon(Icons.add_location),
+            label: const Text('Add Another Location'),
+          ),
+        ),
+      ],
     );
+  }
+  
+  Widget _buildLocationItem(LocationAudioTrack track, LocationPoint location) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Card(
+        elevation: 2,
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                location.locationName ?? 'Unnamed Location',
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Coordinates: ${location.position.latitude.toStringAsFixed(6)}, ${location.position.longitude.toStringAsFixed(6)}',
+                style: const TextStyle(fontSize: 12),
+              ),
+              Text(
+                'Trigger radius: ${location.radius.toStringAsFixed(0)} meters',
+                style: const TextStyle(fontSize: 12),
+              ),
+              const SizedBox(height: 8),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton.icon(
+                    icon: const Icon(Icons.edit, size: 18),
+                    label: const Text('Edit'),
+                    onPressed: () {
+                      _addressController.text = location.locationName ?? '';
+                      _selectedRadius = location.radius;
+                      _selectedLocation = location.position;
+                      _selectedLocationName = location.locationName;
+                      
+                      showModalBottomSheet(
+                        context: context,
+                        isScrollControlled: true,
+                        builder: (context) => _buildEditLocationSheet(track, location),
+                      );
+                    },
+                  ),
+                  const SizedBox(width: 8),
+                  TextButton.icon(
+                    icon: const Icon(Icons.delete, size: 18),
+                    label: const Text('Remove'),
+                    style: TextButton.styleFrom(foregroundColor: Colors.red),
+                    onPressed: () async {
+                      final confirmed = await showDialog<bool>(
+                        context: context,
+                        builder: (context) => AlertDialog(
+                          title: const Text('Remove Location'),
+                          content: const Text(
+                            'Are you sure you want to remove this location?'
+                          ),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.pop(context, false),
+                              child: const Text('Cancel'),
+                            ),
+                            TextButton(
+                              onPressed: () => Navigator.pop(context, true),
+                              child: const Text('Remove'),
+                              style: TextButton.styleFrom(foregroundColor: Colors.red),
+                            ),
+                          ],
+                        ),
+                      );
+                      
+                      if (confirmed == true) {
+                        await _audioService.removeLocationFromTrack(track.id, location.id);
+                        setState(() {});
+                      }
+                    },
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+  
+  Widget _buildAddLocationSheet(LocationAudioTrack track) {
+    return Padding(
+      padding: EdgeInsets.only(
+        bottom: MediaQuery.of(context).viewInsets.bottom,
+        top: 16,
+        left: 16,
+        right: 16,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Add New Location',
+            style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 16),
+          Text('Track: ${track.title} by ${track.artist}'),
+          const SizedBox(height: 16),
+          TextField(
+            controller: _addressController,
+            decoration: const InputDecoration(
+              labelText: 'Location Name/Address',
+              hintText: 'Enter an address, city, or zip code',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(
+                child: Text('Trigger radius: ${_selectedRadius.toStringAsFixed(0)} meters'),
+              ),
+              ElevatedButton(
+                onPressed: _searchAddress,
+                child: const Text('Search Location'),
+              ),
+            ],
+          ),
+          Slider(
+            value: _selectedRadius,
+            min: 10,
+            max: 1000,
+            divisions: 99,
+            label: '${_selectedRadius.toStringAsFixed(0)}m',
+            onChanged: (value) {
+              setState(() {
+                _selectedRadius = value;
+              });
+            },
+          ),
+          const SizedBox(height: 16),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              TextButton(
+                onPressed: () {
+                  Navigator.pop(context);
+                },
+                child: const Text('Cancel'),
+              ),
+              const SizedBox(width: 16),
+              ElevatedButton(
+                onPressed: _selectedLocation == null 
+                    ? null 
+                    : () async {
+                        final locationPoint = LocationPoint(
+                          id: DateTime.now().millisecondsSinceEpoch.toString(),
+                          position: _selectedLocation!,
+                          locationName: _addressController.text.isEmpty 
+                              ? null 
+                              : _addressController.text,
+                          radius: _selectedRadius,
+                        );
+                        
+                        await _audioService.addLocationToTrack(track.id, locationPoint);
+                        setState(() {});
+                        Navigator.pop(context);
+                      },
+                child: const Text('Add Location'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+        ],
+      ),
+    );
+  }
+  
+  Widget _buildEditLocationSheet(LocationAudioTrack track, LocationPoint location) {
+    return Padding(
+      padding: EdgeInsets.only(
+        bottom: MediaQuery.of(context).viewInsets.bottom,
+        top: 16,
+        left: 16,
+        right: 16,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Edit Location',
+            style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 16),
+          Text('Track: ${track.title} by ${track.artist}'),
+          const SizedBox(height: 16),
+          TextField(
+            controller: _addressController,
+            decoration: const InputDecoration(
+              labelText: 'Location Name/Address',
+              hintText: 'Enter an address, city, or zip code',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(
+                child: Text('Trigger radius: ${_selectedRadius.toStringAsFixed(0)} meters'),
+              ),
+              ElevatedButton(
+                onPressed: _searchAddress,
+                child: const Text('Search Location'),
+              ),
+            ],
+          ),
+          Slider(
+            value: _selectedRadius,
+            min: 10,
+            max: 1000,
+            divisions: 99,
+            label: '${_selectedRadius.toStringAsFixed(0)}m',
+            onChanged: (value) {
+              setState(() {
+                _selectedRadius = value;
+              });
+            },
+          ),
+          const SizedBox(height: 16),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              TextButton(
+                onPressed: () {
+                  Navigator.pop(context);
+                },
+                child: const Text('Cancel'),
+              ),
+              const SizedBox(width: 16),
+              ElevatedButton(
+                onPressed: _selectedLocation == null 
+                    ? null 
+                    : () async {
+                        await _audioService.updateLocationForTrack(
+                          track.id,
+                          location.id,
+                          _selectedLocation!,
+                          _addressController.text.isEmpty 
+                              ? null 
+                              : _addressController.text,
+                          _selectedRadius,
+                        );
+                        
+                        setState(() {});
+                        Navigator.pop(context);
+                      },
+                child: const Text('Save Changes'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+        ],
+      ),
+    );
+  }
+  
+  Future<void> _searchAddress() async {
+    final address = _addressController.text.trim();
+    if (address.isEmpty) return;
+    
+    setState(() {
+      _isSearchingAddress = true;
+    });
+    
+    try {
+      final locations = await locationFromAddress(address);
+      if (locations.isNotEmpty) {
+        final location = locations.first;
+        setState(() {
+          _selectedLocation = LatLng(location.latitude, location.longitude);
+          _selectedLocationName = address;
+          _isSearchingAddress = false;
+        });
+        
+        // Show confirmation
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Location set to: $address')),
+        );
+      } else {
+        setState(() {
+          _isSearchingAddress = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Location not found')),
+        );
+      }
+    } catch (e) {
+      setState(() {
+        _isSearchingAddress = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error searching location: $e')),
+      );
+    }
   }
   
   Widget _buildDeviceTracksTab() {
@@ -506,46 +819,6 @@ class _AudioTracksScreenState extends State<AudioTracksScreen> with TickerProvid
         ),
       ],
     );
-  }
-  
-  Future<void> _searchAddress() async {
-    final address = _addressController.text.trim();
-    if (address.isEmpty) return;
-    
-    setState(() {
-      _isSearchingAddress = true;
-    });
-    
-    try {
-      final locations = await locationFromAddress(address);
-      if (locations.isNotEmpty) {
-        final location = locations.first;
-        setState(() {
-          _selectedLocation = LatLng(location.latitude, location.longitude);
-          _selectedLocationName = address;
-          _isSearchingAddress = false;
-        });
-        
-        // Show confirmation
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Location set to: $address')),
-        );
-      } else {
-        setState(() {
-          _isSearchingAddress = false;
-        });
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Location not found')),
-        );
-      }
-    } catch (e) {
-      setState(() {
-        _isSearchingAddress = false;
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error searching location: $e')),
-      );
-    }
   }
   
   Widget _buildDeviceTrackTile(SongModel track) {
